@@ -176,6 +176,9 @@ class ShogunOSCApp(QMainWindow):
         
         # Сигнал изменения описания захвата
         self.shogun_worker.description_changed_signal.connect(self.on_description_changed)
+        
+        # Сигнал изменения пути к папке захвата
+        self.shogun_worker.capture_folder_changed_signal.connect(self.on_capture_folder_changed)
 
         # Сигнал изменения статуса OSC-сервера
         self.status_panel.osc_panel.osc_status_changed.connect(self.on_osc_status_changed)
@@ -237,6 +240,30 @@ class ShogunOSCApp(QMainWindow):
                 self.logger.info(f"Отправлено OSC-сообщение: {config.OSC_DESCRIPTION_CHANGED} -> '{new_description}'")
                 # Добавляем в журнал OSC-сообщений
                 self.log_panel.add_osc_message(config.OSC_DESCRIPTION_CHANGED, f"'{new_description}'")
+    
+    def on_capture_folder_changed(self, new_folder):
+        """Обработчик изменения пути к папке захвата в Shogun Live"""
+        self.logger.info(f"Путь к папке захвата изменился: '{new_folder}'")
+        
+        # Обновляем информацию в интерфейсе, если есть соответствующий метод
+        if hasattr(self.status_panel.shogun_panel, 'update_capture_folder'):
+            self.status_panel.shogun_panel.update_capture_folder(new_folder)
+        
+        # Отправляем OSC-сообщение об изменении пути к папке захвата только если OSC сервер включен
+        if self.osc_server and self.status_panel.osc_panel.osc_enabled.isChecked():
+            # Получаем настройки отправки из панели OSC
+            broadcast_settings = self.status_panel.osc_panel.get_broadcast_settings()
+            
+            # Обновляем настройки в конфигурации
+            config.app_settings["osc_broadcast_ip"] = broadcast_settings["ip"]
+            config.app_settings["osc_broadcast_port"] = broadcast_settings["port"]
+            
+            # Отправляем сообщение
+            success = self.osc_server.send_osc_message(config.OSC_CAPTURE_FOLDER_CHANGED, new_folder)
+            if success:
+                self.logger.info(f"Отправлено OSC-сообщение: {config.OSC_CAPTURE_FOLDER_CHANGED} -> '{new_folder}'")
+                # Добавляем в журнал OSC-сообщений
+                self.log_panel.add_osc_message(config.OSC_CAPTURE_FOLDER_CHANGED, f"'{new_folder}'")
     
     def update_status_bar(self, connected):
         """Обновление статусной строки при изменении состояния подключения"""
