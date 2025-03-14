@@ -281,7 +281,7 @@ class ShogunOSCApp(QMainWindow):
         self.status_panel.osc_panel.ip_input.setEnabled(False)
         self.status_panel.osc_panel.port_input.setEnabled(False)
         
-        self.logger.info(f"OSC-сервер запущен на {ip}:{port}")
+        # Удалено дублирующее сообщение о запуске OSC-сервера
     
     def stop_osc_server(self):
         """Остановка OSC-сервера"""
