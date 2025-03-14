@@ -30,6 +30,7 @@ class ShogunWorker(QThread):
     capture_name_changed_signal = pyqtSignal(str)
     description_changed_signal = pyqtSignal(str)
     description_signal = pyqtSignal(str)
+    capture_folder_changed_signal = pyqtSignal(str)  # Новый сигнал для изменения папки захвата
 
     def __init__(self):
         super().__init__()
@@ -45,6 +46,7 @@ class ShogunWorker(QThread):
         # Информация о текущем захвате
         self.current_capture_name = "Нет данных"
         self.current_description = "Нет данных"
+        self.current_capture_folder = "Нет данных"  # Текущий путь к папке захвата
         
         # Счетчик попыток подключения
         self.reconnect_attempts = 0
@@ -337,6 +339,27 @@ class ShogunWorker(QThread):
                     return
                 else:
                     self.logger.debug(f"Не удалось получить описание захвата: {e}")
+            
+            # Получаем путь к папке захвата
+            try:
+                capture_folder_response = self.capture_service.capture_folder()
+                success, data = self.check_api_result(capture_folder_response)
+                
+                if success and data and len(data) > 0:
+                    new_capture_folder = data[0]
+                    if new_capture_folder != self.current_capture_folder:
+                        self.current_capture_folder = new_capture_folder
+                        self.capture_folder_changed_signal.emit(new_capture_folder)
+                        self.logger.info(f"Путь к папке захвата изменился: '{new_capture_folder}'")
+            except Exception as e:
+                if "RPCNotConnected" in str(e):
+                    self.connected = False
+                    self.connection_signal.emit(False)
+                    self.connection_error_signal.emit(True)
+                    self.logger.warning(f"Соединение с Shogun Live потеряно при получении пути к папке захвата")
+                    return
+                else:
+                    self.logger.debug(f"Не удалось получить путь к папке захвата: {e}")
         
         except Exception as e:
             self.logger.error(f"Ошибка при обновлении состояния: {e}")
@@ -475,6 +498,41 @@ class ShogunWorker(QThread):
                 
         except Exception as e:
             self.logger.error(f"Ошибка при установке описания захвата: {e}")
+            return False
+
+    async def set_capture_folder(self, folder: str) -> bool:
+        """
+        Установка пути к папке захвата в Shogun Live.
+        
+        Args:
+            folder: Новый путь к папке захвата
+            
+        Returns:
+            bool: True если путь успешно установлен, иначе False
+        """
+        if not self.connected or not self.capture_service:
+            self.logger.warning("Не удалось установить путь к папке захвата: нет подключения")
+            return False
+            
+        try:
+            self.logger.info(f"Установка пути к папке захвата: {folder}")
+            
+            # Устанавливаем путь к папке захвата используя метод API set_capture_folder
+            response = self.capture_service.set_capture_folder(folder)
+            success, _ = self.check_api_result(response)
+            
+            if success:
+                self.logger.info(f"Путь к папке захвата успешно установлен: {folder}")
+                # Обновляем локальное значение и отправляем сигнал
+                self.current_capture_folder = folder
+                self.capture_folder_changed_signal.emit(folder)
+                return True
+            else:
+                self.logger.error("Не удалось установить путь к папке захвата: API вернул ошибку")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Ошибка при установке пути к папке захвата: {e}")
             return False
 
     def stop(self):
