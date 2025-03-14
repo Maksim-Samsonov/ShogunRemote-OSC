@@ -9,9 +9,9 @@ import threading
 import os
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
                             QLabel, QPushButton, QGroupBox, QGridLayout,
-                            QLineEdit, QSpinBox, QCheckBox)
+                            QLineEdit, QSpinBox, QCheckBox, QFrame)
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtGui import QPixmap, QFont
 
 import config
 from styles.app_styles import set_status_style
@@ -54,6 +54,7 @@ class ShogunPanel(QGroupBox):
     def init_ui(self):
         """Инициализация интерфейса панели Shogun"""
         layout = QGridLayout()
+        layout.setVerticalSpacing(10)  # Увеличиваем вертикальный отступ между строками
 
         # Информация о состоянии
         layout.addWidget(QLabel("Статус:"), 0, 0)
@@ -85,6 +86,7 @@ class ShogunPanel(QGroupBox):
 
         # Кнопки управления
         button_layout = QHBoxLayout()
+        button_layout.setSpacing(10)  # Добавляем отступ между кнопками
 
         self.connect_button = QPushButton("Подключиться")
         self.connect_button.clicked.connect(self.reconnect_shogun)
@@ -101,6 +103,7 @@ class ShogunPanel(QGroupBox):
         button_layout.addWidget(self.stop_button)
 
         layout.addLayout(button_layout, 4, 0, 1, 2)
+        layout.setRowMinimumHeight(4, 50)  # Устанавливаем минимальную высоту для строки с кнопками
         self.setLayout(layout)
 
     def resizeEvent(self, event):
@@ -222,6 +225,13 @@ class ShogunPanel(QGroupBox):
         finally:
             loop.close()
 
+# Создаем простой разделитель для визуального разделения секций
+def create_separator():
+    line = QFrame()
+    line.setFrameShape(QFrame.HLine)
+    line.setFrameShadow(QFrame.Sunken)
+    return line
+
 class OSCPanel(QGroupBox):
     """Панель настроек OSC-сервера"""
     osc_status_changed = pyqtSignal(bool)
@@ -233,45 +243,59 @@ class OSCPanel(QGroupBox):
     
     def init_ui(self):
         """Инициализация интерфейса панели OSC"""
-        layout = QGridLayout()
+        layout = QVBoxLayout()  # Используем вертикальный макет для лучшей организации
+        layout.setSpacing(10)  # Увеличиваем отступы между элементами
         
         # Настройки приема OSC-сообщений
-        layout.addWidget(QLabel("<b>Настройки приема:</b>"), 0, 0, 1, 2)
+        receive_section = QGroupBox("Настройки приема")
+        receive_layout = QGridLayout()
+        receive_layout.setVerticalSpacing(8)
         
-        layout.addWidget(QLabel("IP:"), 1, 0)
+        receive_layout.addWidget(QLabel("IP:"), 0, 0)
         self.ip_input = QLineEdit(config.DEFAULT_OSC_IP)
-        layout.addWidget(self.ip_input, 1, 1)
+        receive_layout.addWidget(self.ip_input, 0, 1)
         
-        layout.addWidget(QLabel("Порт:"), 2, 0)
+        receive_layout.addWidget(QLabel("Порт:"), 1, 0)
         self.port_input = QSpinBox()
         self.port_input.setRange(1000, 65535)
         self.port_input.setValue(config.DEFAULT_OSC_PORT)
-        layout.addWidget(self.port_input, 2, 1)
+        receive_layout.addWidget(self.port_input, 1, 1)
+        
+        receive_section.setLayout(receive_layout)
+        layout.addWidget(receive_section)
         
         # Настройки отправки OSC-сообщений
-        layout.addWidget(QLabel("<b>Настройки отправки:</b>"), 3, 0, 1, 2)
+        broadcast_section = QGroupBox("Настройки отправки")
+        broadcast_layout = QGridLayout()
+        broadcast_layout.setVerticalSpacing(8)
         
-        layout.addWidget(QLabel("IP:"), 4, 0)
+        broadcast_layout.addWidget(QLabel("IP:"), 0, 0)
         self.broadcast_ip_input = QLineEdit(config.DEFAULT_OSC_BROADCAST_IP)
-        layout.addWidget(self.broadcast_ip_input, 4, 1)
+        broadcast_layout.addWidget(self.broadcast_ip_input, 0, 1)
         
-        layout.addWidget(QLabel("Порт:"), 5, 0)
+        broadcast_layout.addWidget(QLabel("Порт:"), 1, 0)
         self.broadcast_port_input = QSpinBox()
         self.broadcast_port_input.setRange(1000, 65535)
         self.broadcast_port_input.setValue(config.DEFAULT_OSC_BROADCAST_PORT)
-        layout.addWidget(self.broadcast_port_input, 5, 1)
+        broadcast_layout.addWidget(self.broadcast_port_input, 1, 1)
+        
+        broadcast_section.setLayout(broadcast_layout)
+        layout.addWidget(broadcast_section)
         
         # Статус и управление OSC-сервером
-        layout.addWidget(QLabel("<b>Управление сервером:</b>"), 6, 0, 1, 2)
+        control_section = QGroupBox("Управление сервером")
+        control_layout = QGridLayout()
+        control_layout.setVerticalSpacing(8)
         
         # Статус сервера
-        layout.addWidget(QLabel("Статус:"), 7, 0)
+        control_layout.addWidget(QLabel("Статус:"), 0, 0)
         self.osc_status_label = QLabel("Остановлен")
         set_status_style(self.osc_status_label, "disconnected")
-        layout.addWidget(self.osc_status_label, 7, 1)
+        control_layout.addWidget(self.osc_status_label, 0, 1)
         
         # Кнопки управления OSC-сервером
         osc_control_layout = QHBoxLayout()
+        osc_control_layout.setSpacing(5)  # Уменьшаем отступ между кнопками
         
         self.osc_start_button = QPushButton("Запустить")
         self.osc_start_button.clicked.connect(self.on_start_clicked)
@@ -287,21 +311,50 @@ class OSCPanel(QGroupBox):
         self.osc_restart_button.setEnabled(False)
         osc_control_layout.addWidget(self.osc_restart_button)
         
-        layout.addLayout(osc_control_layout, 8, 0, 1, 2)
+        control_layout.addLayout(osc_control_layout, 1, 0, 1, 2)
         
         # Автозапуск при старте
         self.osc_enabled = QCheckBox("Автозапуск при старте приложения")
         self.osc_enabled.setChecked(config.app_settings.get("osc_enabled", True))
-        layout.addWidget(self.osc_enabled, 9, 0, 1, 2)
+        control_layout.addWidget(self.osc_enabled, 2, 0, 1, 2)
+        
+        control_section.setLayout(control_layout)
+        layout.addWidget(control_section)
         
         # Информация о командах OSC
-        layout.addWidget(QLabel("<b>Доступные команды:</b>"), 10, 0, 1, 2)
-        layout.addWidget(QLabel(f"Старт записи: {config.OSC_START_RECORDING}"), 11, 0, 1, 2)
-        layout.addWidget(QLabel(f"Стоп записи: {config.OSC_STOP_RECORDING}"), 12, 0, 1, 2)
-        layout.addWidget(QLabel(f"Установка имени: /SetCaptureName [имя]"), 13, 0, 1, 2)
-        layout.addWidget(QLabel(f"Установка описания: /SetCaptureDescription [описание]"), 14, 0, 1, 2)
-        layout.addWidget(QLabel(f"Уведомление об имени: {config.OSC_CAPTURE_NAME_CHANGED}"), 15, 0, 1, 2)
-        layout.addWidget(QLabel(f"Уведомление об описании: {config.OSC_DESCRIPTION_CHANGED}"), 16, 0, 1, 2)
+        commands_section = QGroupBox("Доступные команды")
+        commands_layout = QVBoxLayout()
+        commands_layout.setSpacing(5)  # Уменьшаем отступ между командами
+        
+        command_font = QFont()
+        command_font.setPointSize(9)  # Уменьшаем размер шрифта для команд
+        
+        start_label = QLabel(f"Старт записи: {config.OSC_START_RECORDING}")
+        start_label.setFont(command_font)
+        commands_layout.addWidget(start_label)
+        
+        stop_label = QLabel(f"Стоп записи: {config.OSC_STOP_RECORDING}")
+        stop_label.setFont(command_font)
+        commands_layout.addWidget(stop_label)
+        
+        set_name_label = QLabel(f"Установка имени: /SetCaptureName [имя]")
+        set_name_label.setFont(command_font)
+        commands_layout.addWidget(set_name_label)
+        
+        set_desc_label = QLabel(f"Установка описания: /SetCaptureDescription [описание]")
+        set_desc_label.setFont(command_font)
+        commands_layout.addWidget(set_desc_label)
+        
+        name_notify_label = QLabel(f"Уведомление об имени: {config.OSC_CAPTURE_NAME_CHANGED}")
+        name_notify_label.setFont(command_font)
+        commands_layout.addWidget(name_notify_label)
+        
+        desc_notify_label = QLabel(f"Уведомление об описании: {config.OSC_DESCRIPTION_CHANGED}")
+        desc_notify_label.setFont(command_font)
+        commands_layout.addWidget(desc_notify_label)
+        
+        commands_section.setLayout(commands_layout)
+        layout.addWidget(commands_section)
         
         self.setLayout(layout)
         
@@ -353,6 +406,7 @@ class StatusPanel(QWidget):
     def init_ui(self, shogun_worker):
         """Инициализация составной панели"""
         layout = QHBoxLayout()
+        layout.setSpacing(15)  # Увеличиваем расстояние между панелями
         
         # Создаем панели
         self.shogun_panel = ShogunPanel(shogun_worker)
