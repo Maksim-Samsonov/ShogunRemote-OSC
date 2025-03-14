@@ -101,6 +101,8 @@ OSC_START_RECORDING = "/RecordStartShogunLive"
 OSC_STOP_RECORDING = "/RecordStopShogunLive"
 OSC_CAPTURE_NAME_CHANGED = "/ShogunLiveCaptureName"  # Адрес для уведомления об изменении имени захвата
 OSC_DESCRIPTION_CHANGED = "/ShogunLiveDescription"  # Адрес для уведомления об изменении описания захвата
+OSC_CAPTURE_FOLDER_CHANGED = "/ShogunLiveCaptureFolder"  # Адрес для уведомления об изменении пути к папке захвата
+OSC_SET_CAPTURE_FOLDER = "/SetCaptureFolder"  # Адрес для установки пути к папке захвата
 
 # Настройки логирования
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'
