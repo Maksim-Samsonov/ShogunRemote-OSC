@@ -37,6 +37,7 @@ class OSCServer(QThread):
         self.dispatcher.map(config.OSC_START_RECORDING, self.start_recording)
         self.dispatcher.map(config.OSC_STOP_RECORDING, self.stop_recording)
         self.dispatcher.map("/SetCaptureName", self.set_capture_name)
+        self.dispatcher.map("/SetCaptureDescription", self.set_capture_description)
         self.dispatcher.set_default_handler(self.default_handler)
     
     def start_recording(self, address: str, *args: Any) -> None:
@@ -86,7 +87,13 @@ class OSCServer(QThread):
             self.message_signal.emit(address, "Ошибка: отсутствует имя захвата")
             return
             
-        new_name = str(args[0])
+        # Преобразуем аргумент в строку и проверяем, что он не пустой
+        new_name = str(args[0]).strip()
+        if not new_name:
+            self.logger.warning(f"Получена команда OSC: {address} -> Пустое имя захвата")
+            self.message_signal.emit(address, "Ошибка: пустое имя захвата")
+            return
+            
         self.logger.info(f"Получена команда OSC: {address} -> Установка имени захвата: '{new_name}'")
         self.message_signal.emit(address, f"Установка имени захвата: '{new_name}'")
         
@@ -98,6 +105,34 @@ class OSCServer(QThread):
                              args=(set_name_task,)).start()
         else:
             self.logger.warning("Не удалось установить имя захвата: нет подключения к Shogun Live")
+    
+    def set_capture_description(self, address: str, *args: Any) -> None:
+        """
+        Обработчик команды установки описания захвата
+        
+        Args:
+            address: OSC-адрес сообщения
+            *args: Аргументы OSC-сообщения (первый аргумент - новое описание)
+        """
+        if not args:
+            self.logger.warning(f"Получена команда OSC: {address} -> Отсутствует описание захвата")
+            self.message_signal.emit(address, "Ошибка: отсутствует описание захвата")
+            return
+            
+        # Преобразуем аргумент в строку
+        new_description = str(args[0])
+        
+        self.logger.info(f"Получена команда OSC: {address} -> Установка описания захвата: '{new_description}'")
+        self.message_signal.emit(address, f"Установка описания захвата: '{new_description}'")
+        
+        if self.shogun_worker and self.shogun_worker.connected:
+            async def set_description_task():
+                return await self.shogun_worker.set_capture_description(new_description)
+                
+            threading.Thread(target=self._run_async_task, 
+                             args=(set_description_task,)).start()
+        else:
+            self.logger.warning("Не удалось установить описание захвата: нет подключения к Shogun Live")
     
     def default_handler(self, address: str, *args: Any) -> None:
         """
@@ -140,6 +175,11 @@ class OSCServer(QThread):
             bool: True если сообщение отправлено успешно, иначе False
         """
         try:
+            # Проверяем, что адрес не пустой
+            if not address:
+                self.logger.error("Попытка отправить OSC-сообщение с пустым адресом")
+                return False
+                
             # Создаем клиент для отправки, если еще не создан
             if not self.osc_client:
                 # Используем настройки из конфигурации

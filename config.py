@@ -99,7 +99,8 @@ DEFAULT_OSC_BROADCAST_PORT = app_settings.get("osc_broadcast_port", 9000)
 # OSC-адреса для управления Shogun Live
 OSC_START_RECORDING = "/RecordStartShogunLive"
 OSC_STOP_RECORDING = "/RecordStopShogunLive"
-OSC_CAPTURE_NAME_CHANGED = "/ShogunLiveCaptureName"  # Новый адрес для уведомления об изменении имени захвата
+OSC_CAPTURE_NAME_CHANGED = "/ShogunLiveCaptureName"  # Адрес для уведомления об изменении имени захвата
+OSC_DESCRIPTION_CHANGED = "/ShogunLiveDescription"  # Адрес для уведомления об изменении описания захвата
 
 # Настройки логирования
 LOG_FORMAT = '%(asctime)s [%(levelname)s] %(message)s'

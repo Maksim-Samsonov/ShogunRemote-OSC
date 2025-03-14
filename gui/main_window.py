@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                            QLineEdit, QSpinBox, QComboBox, QStatusBar, QCheckBox, QSplitter,
                            QAction, QMenu, QToolBar, QApplication, QMessageBox, QFileDialog)
 from PyQt5.QtCore import Qt, QTimer, QSettings
-from PyQt5.QtGui import QTextCursor, QIcon
+from PyQt5.QtGui import QTextCursor, QIcon, QPixmap
 
 from gui.status_panel import StatusPanel
 from gui.log_panel import LogPanel
@@ -32,18 +32,37 @@ class ShogunOSCApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.logger = logging.getLogger('ShogunOSC')
-        
-        # Инициализация рабочих потоков
+
+        # Create ShogunWorker before loading UI
         self.shogun_worker = ShogunWorker()
-        self.osc_server = None  # Будет создан после настройки интерфейса
         
-        # Настройка интерфейса
+        # Load icons from absolute paths
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "icons"))
+        icon_connected = os.path.join(icons_dir, "icon_green.png")
+        icon_disconnected = os.path.join(icons_dir, "icon_red.png")
+        
+        self.icon_connected = QIcon(icon_connected)
+        self.icon_disconnected = QIcon(icon_disconnected)
+        
+        if self.icon_connected.isNull() or self.icon_disconnected.isNull():
+            self.logger.warning("Failed to load window icons")
+            # Create fallback icons
+            pixmap = QPixmap(32, 32)
+            pixmap.fill(Qt.green)
+            self.icon_connected = QIcon(pixmap)
+            pixmap.fill(Qt.red)
+            self.icon_disconnected = QIcon(pixmap)
+        
+        # Set initial icon
+        self.setWindowIcon(self.icon_disconnected)
+        
+        # Initialize UI
         self.init_ui()
         
-        # Подключение сигналов
+        # Connect signals
         self.connect_signals()
         
-        # Запуск рабочих потоков
+        # Start worker thread
         self.shogun_worker.start()
         
         # Проверка импорта библиотек
@@ -123,35 +142,22 @@ class ShogunOSCApp(QMainWindow):
         
         # Меню "Настройки"
         settings_menu = menubar.addMenu("Настройки")
-        
+
+        # Подменю "OSC"
+        osc_menu = settings_menu.addMenu("OSC")
+
         self.theme_action = QAction("Тёмная тема", self)
         self.theme_action.setCheckable(True)
         self.theme_action.setChecked(config.DARK_MODE)
         self.theme_action.triggered.connect(self.toggle_theme)
         settings_menu.addAction(self.theme_action)
-        
+
         # Меню "Справка"
         help_menu = menubar.addMenu("Справка")
-        
+
         about_action = QAction("О программе", self)
         about_action.triggered.connect(self.show_about)
         help_menu.addAction(about_action)
-        
-        # Панель инструментов
-        toolbar = QToolBar("Основная панель")
-        self.addToolBar(toolbar)
-        
-        # Кнопки для удобного доступа к функциям
-        theme_tool_action = QAction("Сменить тему", self)
-        theme_tool_action.triggered.connect(self.toggle_theme)
-        toolbar.addAction(theme_tool_action)
-        
-        toolbar.addSeparator()
-        
-        # Добавляем кнопку для сохранения лога
-        save_log_tool_action = QAction("Сохранить лог", self)
-        save_log_tool_action.triggered.connect(self.save_log_to_file)
-        toolbar.addAction(save_log_tool_action)
     
     def connect_signals(self):
         """Подключение сигналов между компонентами"""
@@ -164,6 +170,24 @@ class ShogunOSCApp(QMainWindow):
         
         # Сигнал изменения имени захвата
         self.shogun_worker.capture_name_changed_signal.connect(self.on_capture_name_changed)
+        
+        # Сигнал изменения описания захвата
+        self.shogun_worker.description_changed_signal.connect(self.on_description_changed)
+
+        # Сигнал изменения статуса OSC-сервера
+        self.status_panel.osc_panel.osc_status_changed.connect(self.on_osc_status_changed)
+
+    def on_osc_status_changed(self, running):
+        """Обработчик изменения статуса OSC-сервера"""
+        self.logger.info(f"OSC server status changed: {running}")
+        if running:
+            ip = self.status_panel.osc_panel.ip_input.text()
+            port = self.status_panel.osc_panel.port_input.value()
+            self.start_osc_server()
+            self.logger.info(f"OSC server started from signal on {ip}:{port}")
+        else:
+            self.stop_osc_server()
+            self.logger.info("OSC server stopped from signal")
     
     def on_capture_name_changed(self, new_name):
         """Обработчик изменения имени захвата в Shogun Live"""
@@ -172,8 +196,8 @@ class ShogunOSCApp(QMainWindow):
         # Обновляем информацию в интерфейсе
         self.status_panel.shogun_panel.update_capture_name(new_name)
         
-        # Отправляем OSC-сообщение об изменении имени захвата
-        if self.osc_server:
+        # Отправляем OSC-сообщение об изменении имени захвата только если OSC сервер включен
+        if self.osc_server and self.status_panel.osc_panel.osc_enabled.isChecked():
             # Получаем настройки отправки из панели OSC
             broadcast_settings = self.status_panel.osc_panel.get_broadcast_settings()
             
@@ -188,12 +212,39 @@ class ShogunOSCApp(QMainWindow):
                 # Добавляем в журнал OSC-сообщений
                 self.log_panel.add_osc_message(config.OSC_CAPTURE_NAME_CHANGED, f"'{new_name}'")
     
+    def on_description_changed(self, new_description):
+        """Обработчик изменения описания захвата в Shogun Live"""
+        self.logger.info(f"Описание захвата изменилось: '{new_description}'")
+        
+        # Обновляем информацию в интерфейсе
+        self.status_panel.shogun_panel.update_description(new_description)
+        
+        # Отправляем OSC-сообщение об изменении описания захвата только если OSC сервер включен
+        if self.osc_server and self.status_panel.osc_panel.osc_enabled.isChecked():
+            # Получаем настройки отправки из панели OSC
+            broadcast_settings = self.status_panel.osc_panel.get_broadcast_settings()
+            
+            # Обновляем настройки в конфигурации
+            config.app_settings["osc_broadcast_ip"] = broadcast_settings["ip"]
+            config.app_settings["osc_broadcast_port"] = broadcast_settings["port"]
+            
+            # Отправляем сообщение
+            success = self.osc_server.send_osc_message(config.OSC_DESCRIPTION_CHANGED, new_description)
+            if success:
+                self.logger.info(f"Отправлено OSC-сообщение: {config.OSC_DESCRIPTION_CHANGED} -> '{new_description}'")
+                # Добавляем в журнал OSC-сообщений
+                self.log_panel.add_osc_message(config.OSC_DESCRIPTION_CHANGED, f"'{new_description}'")
+    
     def update_status_bar(self, connected):
         """Обновление статусной строки при изменении состояния подключения"""
         if connected:
             self.status_bar.showMessage("Подключено к Shogun Live")
+            # Меняем иконку на зеленую (подключено)
+            self.setWindowIcon(self.icon_connected)
         else:
             self.status_bar.showMessage("Нет подключения к Shogun Live")
+            # Меняем иконку на красную (отключено)
+            self.setWindowIcon(self.icon_disconnected)
     
     def update_recording_status(self, is_recording):
         """Обновление статусной строки при изменении состояния записи"""
@@ -231,9 +282,10 @@ class ShogunOSCApp(QMainWindow):
     
     def stop_osc_server(self):
         """Остановка OSC-сервера"""
-        if self.osc_server and self.osc_server.isRunning():
-            self.osc_server.stop()
-            self.osc_server.wait()  # Ждем завершения потока
+        if self.osc_server:
+            if self.osc_server.isRunning():
+                self.osc_server.stop()
+                self.osc_server.wait()  # Ждем завершения потока
             self.osc_server = None
             
             # Разблокируем настройки
