@@ -36,6 +36,9 @@ class ShogunOSCApp(QMainWindow):
         # Create ShogunWorker before loading UI
         self.shogun_worker = ShogunWorker()
         
+        # Initialize the osc_server attribute
+        self.osc_server = None
+        
         # Load icons from absolute paths
         icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "icons"))
         icon_connected = os.path.join(icons_dir, "icon_green.png")
@@ -282,7 +285,7 @@ class ShogunOSCApp(QMainWindow):
     
     def stop_osc_server(self):
         """Остановка OSC-сервера"""
-        if self.osc_server:
+        if hasattr(self, 'osc_server') and self.osc_server:
             if self.osc_server.isRunning():
                 self.osc_server.stop()
                 self.osc_server.wait()  # Ждем завершения потока

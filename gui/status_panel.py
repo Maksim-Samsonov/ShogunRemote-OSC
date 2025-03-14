@@ -22,11 +22,32 @@ class ShogunPanel(QGroupBox):
         super().__init__("Shogun Live")
         self.logger = logging.getLogger('ShogunOSC')
         self.shogun_worker = shogun_worker
-        self.red_icon = QPixmap(os.path.join("icons", "icon_red.png"))
-        self.green_icon = QPixmap(os.path.join("icons", "icon_green.png"))
-        self.icon_size = 32  # Set a reasonable default size for the icon
+        
+        # Absolute path to icons
+        icons_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "icons"))
+        red_icon_path = os.path.join(icons_dir, "icon_red.png")
+        green_icon_path = os.path.join(icons_dir, "icon_green.png")
+        
+        # Load icons with error handling
+        self.red_icon = QPixmap()
+        self.green_icon = QPixmap()
+        
+        if os.path.exists(red_icon_path) and os.path.exists(green_icon_path):
+            self.red_icon.load(red_icon_path)
+            self.green_icon.load(green_icon_path)
+        
+        # Create fallback icons if loading failed
+        if self.red_icon.isNull() or self.green_icon.isNull():
+            self.logger.warning("Failed to load icons, creating fallback icons")
+            self.red_icon = QPixmap(16, 16)
+            self.green_icon = QPixmap(16, 16)
+            self.red_icon.fill(Qt.red)
+            self.green_icon.fill(Qt.green)
+        
+        self.icon_size = 16  # Set a reasonable default size for the icon
         self.red_icon = self.red_icon.scaled(self.icon_size, self.icon_size, Qt.KeepAspectRatio)
         self.green_icon = self.green_icon.scaled(self.icon_size, self.icon_size, Qt.KeepAspectRatio)
+        
         self.init_ui()
         self.connect_signals()
 
@@ -38,7 +59,7 @@ class ShogunPanel(QGroupBox):
         layout.addWidget(QLabel("Статус:"), 0, 0)
         self.status_label = QLabel(config.STATUS_DISCONNECTED)
         self.status_icon = QLabel()
-        self.status_icon.setPixmap(self.green_icon)  # Default to green
+        self.status_icon.setPixmap(self.red_icon)  # Default to red (disconnected)
         set_status_style(self.status_label, "disconnected")
         hbox = QHBoxLayout()
         hbox.addWidget(self.status_label)
@@ -50,19 +71,17 @@ class ShogunPanel(QGroupBox):
         self.recording_label.setStyleSheet("color: gray;")
         layout.addWidget(self.recording_label, 1, 1)
 
-        layout.addWidget(QLabel("Текущий тейк:"), 2, 0)
-        self.take_label = QLabel("Нет данных")
-        layout.addWidget(self.take_label, 2, 1)
+        # REMOVED: "Текущий тейк" field and label
 
         # Добавляем поле для отображения имени захвата
-        layout.addWidget(QLabel("Имя захвата:"), 3, 0)
+        layout.addWidget(QLabel("Имя захвата:"), 2, 0)
         self.capture_name_label = QLabel("Нет данных")
-        layout.addWidget(self.capture_name_label, 3, 1)
+        layout.addWidget(self.capture_name_label, 2, 1)
 
         # Добавляем поле для отображения описания захвата
-        layout.addWidget(QLabel("Описание:"), 4, 0)
+        layout.addWidget(QLabel("Описание:"), 3, 0)
         self.description_label = QLabel("Нет данных")
-        layout.addWidget(self.description_label, 4, 1)
+        layout.addWidget(self.description_label, 3, 1)
 
         # Кнопки управления
         button_layout = QHBoxLayout()
@@ -81,25 +100,37 @@ class ShogunPanel(QGroupBox):
         self.stop_button.setEnabled(False)
         button_layout.addWidget(self.stop_button)
 
-        layout.addLayout(button_layout, 5, 0, 1, 2)
+        layout.addLayout(button_layout, 4, 0, 1, 2)
         self.setLayout(layout)
 
     def resizeEvent(self, event):
         """Resizes the status icon when the panel is resized."""
-        self.red_icon = QPixmap(os.path.join("icons", "icon_red.png"))
-        self.green_icon = QPixmap(os.path.join("icons", "icon_green.png"))
-        self.red_icon = self.red_icon.scaled(self.width() / 4, self.width() / 4, Qt.KeepAspectRatio)
-        self.green_icon = self.green_icon.scaled(self.width() / 4, self.width() / 4, Qt.KeepAspectRatio)
+        # We don't need to reload the icons on resize, just rescale the existing ones
+        if not self.red_icon.isNull() and not self.green_icon.isNull():
+            new_size = min(24, self.width() // 20)  # Limit maximum size
+            scaled_red = self.red_icon.scaled(new_size, new_size, Qt.KeepAspectRatio)
+            scaled_green = self.green_icon.scaled(new_size, new_size, Qt.KeepAspectRatio)
+            
+            # Only update if we successfully scaled
+            if not scaled_red.isNull() and not scaled_green.isNull():
+                self.red_icon = scaled_red
+                self.green_icon = scaled_green
+                
+                # Update the current icon
+                if self.shogun_worker.connected:
+                    self.status_icon.setPixmap(self.green_icon)
+                else:
+                    self.status_icon.setPixmap(self.red_icon)
+        
         super().resizeEvent(event)
-        self.update_connection_status(self.shogun_worker.connected)
 
     def connect_signals(self):
         """Подключение сигналов от Shogun Worker"""
         self.shogun_worker.connection_signal.connect(self.update_connection_status)
         self.shogun_worker.recording_signal.connect(self.update_recording_status)
-        self.shogun_worker.take_name_signal.connect(self.update_take_name)
+        # REMOVED: self.shogun_worker.take_name_signal.connect(self.update_take_name)
         self.shogun_worker.capture_name_changed_signal.connect(self.update_capture_name)
-        self.shogun_worker.description_signal.connect(self.update_description)
+        self.shogun_worker.description_changed_signal.connect(self.update_description)
         self.shogun_worker.connection_error_signal.connect(self.update_connection_error)
 
     def update_connection_status(self, connected):
@@ -138,9 +169,7 @@ class ShogunPanel(QGroupBox):
             self.start_button.setEnabled(self.shogun_worker.connected)
             self.stop_button.setEnabled(False)
 
-    def update_take_name(self, name):
-        """Обновление имени текущего тейка"""
-        self.take_label.setText(name)
+    # REMOVED: update_take_name method
 
     def update_capture_name(self, name):
         """Обновление имени захвата"""
@@ -228,6 +257,7 @@ class OSCPanel(QGroupBox):
         
         layout.addWidget(QLabel("Порт:"), 5, 0)
         self.broadcast_port_input = QSpinBox()
+        self.broadcast_port_input.setRange(1000, 65535)
         self.broadcast_port_input.setValue(config.DEFAULT_OSC_BROADCAST_PORT)
         layout.addWidget(self.broadcast_port_input, 5, 1)
         
@@ -288,11 +318,7 @@ class OSCPanel(QGroupBox):
         self.osc_start_button.setEnabled(False)
         self.osc_stop_button.setEnabled(True)
         self.osc_restart_button.setEnabled(True)
-        self.ip_input = QLineEdit(config.DEFAULT_OSC_IP)
         self.ip_input.setEnabled(False)
-        self.port_input = QSpinBox()
-        self.port_input.setRange(1000, 65535)
-        self.port_input.setValue(config.DEFAULT_OSC_PORT)
         self.port_input.setEnabled(False)
         self.osc_status_label.setText("Запущен")
         set_status_style(self.osc_status_label, "connected")
@@ -304,11 +330,7 @@ class OSCPanel(QGroupBox):
         self.osc_start_button.setEnabled(True)
         self.osc_stop_button.setEnabled(False)
         self.osc_restart_button.setEnabled(False)
-        self.ip_input = QLineEdit(config.DEFAULT_OSC_IP)
         self.ip_input.setEnabled(True)
-        self.port_input = QSpinBox()
-        self.port_input.setRange(1000, 65535)
-        self.port_input.setValue(config.DEFAULT_OSC_PORT)
         self.port_input.setEnabled(True)
         self.osc_status_label.setText("Остановлен")
         set_status_style(self.osc_status_label, "disconnected")

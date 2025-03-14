@@ -1,337 +1,483 @@
 """
-Панель статуса состояния Shogun Live и настроек OSC.
+Модуль для взаимодействия с Shogun Live API.
+Содержит основной рабочий класс для подключения и управления Shogun Live.
 """
 
 import asyncio
 import logging
-import threading
+import time
+from typing import Optional, Any, Dict, Tuple
+from datetime import datetime
 
-import os
-from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout,
-                            QLabel, QPushButton, QGroupBox, QGridLayout,
-                            QLineEdit, QSpinBox, QCheckBox)
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import QThread, pyqtSignal
+
+# Импорт необходимых API
+from vicon_core_api import Client as ViconClient
+from vicon_core_api.result import Result
+from shogun_live_api import CaptureServices
 
 import config
-from styles.app_styles import set_status_style
 
-class ShogunPanel(QGroupBox):
-    """Панель информации о состоянии Shogun Live и кнопок управления"""
-    def __init__(self, shogun_worker):
-        super().__init__("Shogun Live")
-        self.logger = logging.getLogger('ShogunOSC')
-        self.shogun_worker = shogun_worker
-        self.red_icon = QPixmap(os.path.join("icons", "icon_red.png"))
-        self.green_icon = QPixmap(os.path.join("icons", "icon_green.png"))
-        self.icon_size = 32  # Set a reasonable default size for the icon
-        self.red_icon = self.red_icon.scaled(self.icon_size, self.icon_size, Qt.KeepAspectRatio)
-        self.green_icon = self.green_icon.scaled(self.icon_size, self.icon_size, Qt.KeepAspectRatio)
-        self.init_ui()
-        self.connect_signals()
-
-    def init_ui(self):
-        """Инициализация интерфейса панели Shogun"""
-        layout = QGridLayout()
-
-        # Информация о состоянии
-        layout.addWidget(QLabel("Статус:"), 0, 0)
-        self.status_label = QLabel(config.STATUS_DISCONNECTED)
-        self.status_icon = QLabel()
-        self.status_icon.setPixmap(self.green_icon)  # Default to green
-        set_status_style(self.status_label, "disconnected")
-        hbox = QHBoxLayout()
-        hbox.addWidget(self.status_label)
-        hbox.addWidget(self.status_icon)
-        layout.addLayout(hbox, 0, 1)
-
-        layout.addWidget(QLabel("Запись:"), 1, 0)
-        self.recording_label = QLabel(config.STATUS_RECORDING_INACTIVE)
-        self.recording_label.setStyleSheet("color: gray;")
-        layout.addWidget(self.recording_label, 1, 1)
-
-        layout.addWidget(QLabel("Текущий тейк:"), 2, 0)
-        self.take_label = QLabel("Нет данных")
-        layout.addWidget(self.take_label, 2, 1)
-
-        # Добавляем поле для отображения имени захвата
-        layout.addWidget(QLabel("Имя захвата:"), 3, 0)
-        self.capture_name_label = QLabel("Нет данных")
-        layout.addWidget(self.capture_name_label, 3, 1)
-
-        # Добавляем поле для отображения описания захвата
-        layout.addWidget(QLabel("Описание:"), 4, 0)
-        self.description_label = QLabel("Нет данных")
-        layout.addWidget(self.description_label, 4, 1)
-
-        # Кнопки управления
-        button_layout = QHBoxLayout()
-
-        self.connect_button = QPushButton("Подключиться")
-        self.connect_button.clicked.connect(self.reconnect_shogun)
-        button_layout.addWidget(self.connect_button)
-
-        self.start_button = QPushButton("Начать запись")
-        self.start_button.clicked.connect(self.start_recording)
-        self.start_button.setEnabled(False)
-        button_layout.addWidget(self.start_button)
-
-        self.stop_button = QPushButton("Остановить запись")
-        self.stop_button.clicked.connect(self.stop_recording)
-        self.stop_button.setEnabled(False)
-        button_layout.addWidget(self.stop_button)
-
-        layout.addLayout(button_layout, 5, 0, 1, 2)
-        self.setLayout(layout)
-
-    def resizeEvent(self, event):
-        """Resizes the status icon when the panel is resized."""
-        self.red_icon = QPixmap(os.path.join("icons", "icon_red.png"))
-        self.green_icon = QPixmap(os.path.join("icons", "icon_green.png"))
-        self.red_icon = self.red_icon.scaled(self.width() / 4, self.width() / 4, Qt.KeepAspectRatio)
-        self.green_icon = self.green_icon.scaled(self.width() / 4, self.width() / 4, Qt.KeepAspectRatio)
-        super().resizeEvent(event)
-        self.update_connection_status(self.shogun_worker.connected)
-
-    def connect_signals(self):
-        """Подключение сигналов от Shogun Worker"""
-        self.shogun_worker.connection_signal.connect(self.update_connection_status)
-        self.shogun_worker.recording_signal.connect(self.update_recording_status)
-        self.shogun_worker.take_name_signal.connect(self.update_take_name)
-        self.shogun_worker.capture_name_changed_signal.connect(self.update_capture_name)
-        self.shogun_worker.description_changed_signal.connect(self.update_description)
-        self.shogun_worker.connection_error_signal.connect(self.update_connection_error)
-
-    def update_connection_status(self, connected):
-        """Обновление отображения статуса подключения"""
-        if connected:
-            self.status_label.setText(config.STATUS_CONNECTED)
-            set_status_style(self.status_label, "connected")
-            self.status_icon.setPixmap(self.green_icon)
-            self.start_button.setEnabled(True)
-            self.connect_button.setEnabled(False)
-        else:
-            self.status_label.setText(config.STATUS_DISCONNECTED)
-            set_status_style(self.status_label, "disconnected")
-            self.status_icon.setPixmap(self.red_icon)
-            self.start_button.setEnabled(False)
-            self.stop_button.setEnabled(False)
-            self.connect_button.setEnabled(True)
-
-    def update_connection_error(self, error):
-        """Обновление иконки при ошибке подключения"""
-        if error:
-            self.status_icon.setPixmap(self.red_icon)
-        else:
-            self.status_icon.setPixmap(self.green_icon)
-
-    def update_recording_status(self, is_recording):
-        """Обновление отображения статуса записи"""
-        if is_recording:
-            self.recording_label.setText(config.STATUS_RECORDING_ACTIVE)
-            set_status_style(self.recording_label, "recording")
-            self.start_button.setEnabled(False)
-            self.stop_button.setEnabled(True)
-        else:
-            self.recording_label.setText(config.STATUS_RECORDING_INACTIVE)
-            set_status_style(self.recording_label, "")
-            self.start_button.setEnabled(self.shogun_worker.connected)
-            self.stop_button.setEnabled(False)
-
-    def update_take_name(self, name):
-        """Обновление имени текущего тейка"""
-        self.take_label.setText(name)
-
-    def update_capture_name(self, name):
-        """Обновление имени захвата"""
-        self.capture_name_label.setText(name)
-
-    def update_description(self, description):
-        """Обновление описания захвата"""
-        self.description_label.setText(description)
-
-    def reconnect_shogun(self):
-        """Запуск переподключения к Shogun Live"""
-        threading.Thread(target=self._run_reconnect).start()
-
-    def _run_reconnect(self):
-        """Выполнение переподключения в отдельном потоке"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            result = loop.run_until_complete(self.shogun_worker.reconnect_shogun())
-            if result:
-                self.logger.info("Переподключение выполнено успешно")
-            else:
-                self.logger.error("Не удалось переподключиться")
-        finally:
-            loop.close()
-
-    def start_recording(self):
-        """Запуск записи"""
-        threading.Thread(target=self._run_start_recording).start()
-
-    def _run_start_recording(self):
-        """Запуск записи в отдельном потоке"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self.shogun_worker.startcapture())
-        finally:
-            loop.close()
-
-    def stop_recording(self):
-        """Остановка записи"""
-        threading.Thread(target=self._run_stop_recording).start()
-
-    def _run_stop_recording(self):
-        """Остановка записи в отдельном потоке"""
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        try:
-            loop.run_until_complete(self.shogun_worker.stopcapture())
-        finally:
-            loop.close()
-
-class OSCPanel(QGroupBox):
-    """Панель настроек OSC-сервера"""
-    osc_status_changed = pyqtSignal(bool)
+class ShogunWorker(QThread):
+    """
+    Рабочий поток для взаимодействия с Shogun Live API.
+    Обеспечивает асинхронное взаимодействие с API и сигнализирует об изменениях.
+    """
+    # Сигналы для обновления UI
+    connection_signal = pyqtSignal(bool)
+    connection_error_signal = pyqtSignal(bool)
+    recording_signal = pyqtSignal(bool)
+    capture_name_changed_signal = pyqtSignal(str)
+    description_changed_signal = pyqtSignal(str)
+    description_signal = pyqtSignal(str)
 
     def __init__(self):
-        super().__init__("OSC Сервер")
-        self.init_ui()
-        self.osc_server_running = False
-    
-    def init_ui(self):
-        """Инициализация интерфейса панели OSC"""
-        layout = QGridLayout()
-        
-        # Настройки приема OSC-сообщений
-        layout.addWidget(QLabel("<b>Настройки приема:</b>"), 0, 0, 1, 2)
-        
-        layout.addWidget(QLabel("IP:"), 1, 0)
-        self.ip_input = QLineEdit(config.DEFAULT_OSC_IP)
-        layout.addWidget(self.ip_input, 1, 1)
-        
-        layout.addWidget(QLabel("Порт:"), 2, 0)
-        self.port_input = QSpinBox()
-        self.port_input.setRange(1000, 65535)
-        self.port_input.setValue(config.DEFAULT_OSC_PORT)
-        layout.addWidget(self.port_input, 2, 1)
-        
-        # Настройки отправки OSC-сообщений
-        layout.addWidget(QLabel("<b>Настройки отправки:</b>"), 3, 0, 1, 2)
-        
-        layout.addWidget(QLabel("IP:"), 4, 0)
-        self.broadcast_ip_input = QLineEdit(config.DEFAULT_OSC_BROADCAST_IP)
-        layout.addWidget(self.broadcast_ip_input, 4, 1)
-        
-        layout.addWidget(QLabel("Порт:"), 5, 0)
-        self.broadcast_port_input = QSpinBox()
-        self.broadcast_port_input.setRange(1000, 65535)
-        self.broadcast_port_input.setValue(config.DEFAULT_OSC_BROADCAST_PORT)
-        layout.addWidget(self.broadcast_port_input, 5, 1)
-        
-        # Статус и управление OSC-сервером
-        layout.addWidget(QLabel("<b>Управление сервером:</b>"), 6, 0, 1, 2)
-        
-        # Статус сервера
-        layout.addWidget(QLabel("Статус:"), 7, 0)
-        self.osc_status_label = QLabel("Остановлен")
-        set_status_style(self.osc_status_label, "disconnected")
-        layout.addWidget(self.osc_status_label, 7, 1)
-        
-        # Кнопки управления OSC-сервером
-        osc_control_layout = QHBoxLayout()
-        
-        self.osc_start_button = QPushButton("Запустить")
-        self.osc_start_button.clicked.connect(self.on_start_clicked)
-        osc_control_layout.addWidget(self.osc_start_button)
-        
-        self.osc_stop_button = QPushButton("Остановить")
-        self.osc_stop_button.clicked.connect(self.on_stop_clicked)
-        self.osc_stop_button.setEnabled(False)
-        osc_control_layout.addWidget(self.osc_stop_button)
-        
-        self.osc_restart_button = QPushButton("Перезапустить")
-        self.osc_restart_button.clicked.connect(self.on_restart_clicked)
-        self.osc_restart_button.setEnabled(False)
-        osc_control_layout.addWidget(self.osc_restart_button)
-        
-        layout.addLayout(osc_control_layout, 8, 0, 1, 2)
-        
-        # Автозапуск при старте
-        self.osc_enabled = QCheckBox("Автозапуск при старте приложения")
-        self.osc_enabled.setChecked(config.app_settings.get("osc_enabled", True))
-        layout.addWidget(self.osc_enabled, 9, 0, 1, 2)
-        
-        # Информация о командах OSC
-        layout.addWidget(QLabel("<b>Доступные команды:</b>"), 10, 0, 1, 2)
-        layout.addWidget(QLabel(f"Старт записи: {config.OSC_START_RECORDING}"), 11, 0, 1, 2)
-        layout.addWidget(QLabel(f"Стоп записи: {config.OSC_STOP_RECORDING}"), 12, 0, 1, 2)
-        layout.addWidget(QLabel(f"Установка имени: /SetCaptureName [имя]"), 13, 0, 1, 2)
-        layout.addWidget(QLabel(f"Установка описания: /SetCaptureDescription [описание]"), 14, 0, 1, 2)
-        layout.addWidget(QLabel(f"Уведомление об имени: {config.OSC_CAPTURE_NAME_CHANGED}"), 15, 0, 1, 2)
-        layout.addWidget(QLabel(f"Уведомление об описании: {config.OSC_DESCRIPTION_CHANGED}"), 16, 0, 1, 2)
-        
-        self.setLayout(layout)
-        
-    def get_broadcast_settings(self):
-        """Получение настроек для отправки OSC-сообщений"""
-        return {
-            "ip": self.broadcast_ip_input.text(),
-            "port": self.broadcast_port_input.value()
-        }
-
-    def on_start_clicked(self):
-        """Обработчик нажатия кнопки запуска OSC-сервера"""
-        self.osc_status_changed.emit(True)
-        self.osc_start_button.setEnabled(False)
-        self.osc_stop_button.setEnabled(True)
-        self.osc_restart_button.setEnabled(True)
-        self.ip_input.setEnabled(False)
-        self.port_input.setEnabled(False)
-        self.osc_status_label.setText("Запущен")
-        set_status_style(self.osc_status_label, "connected")
-        self.osc_server_running = True
-
-    def on_stop_clicked(self):
-        """Обработчик нажатия кнопки остановки OSC-сервера"""
-        self.osc_status_changed.emit(False)
-        self.osc_start_button.setEnabled(True)
-        self.osc_stop_button.setEnabled(False)
-        self.osc_restart_button.setEnabled(False)
-        self.ip_input.setEnabled(True)
-        self.port_input.setEnabled(True)
-        self.osc_status_label.setText("Остановлен")
-        set_status_style(self.osc_status_label, "disconnected")
-        self.osc_server_running = False
-
-    def on_restart_clicked(self):
-        """Обработчик нажатия кнопки перезапуска OSC-сервера"""
-        self.osc_status_changed.emit(False)
-        self.osc_status_changed.emit(True)
-        self.on_stop_clicked()
-        self.on_start_clicked()
-
-class StatusPanel(QWidget):
-    """Составная панель статуса и настроек"""
-    def __init__(self, shogun_worker):
         super().__init__()
-        self.shogun_worker = shogun_worker
-        self.init_ui(shogun_worker)
-    
-    def init_ui(self, shogun_worker):
-        """Инициализация составной панели"""
-        layout = QHBoxLayout()
+        self.logger = logging.getLogger('ShogunOSC')
+        self.running = True
         
-        # Создаем панели
-        self.shogun_panel = ShogunPanel(shogun_worker)
-        self.osc_panel = OSCPanel()
+        # Состояние подключения и записи
+        self.connected = False
+        self.recording = False
+        self.client = None
+        self.capture_service = None
         
-        # Добавляем панели с разным весом
-        layout.addWidget(self.shogun_panel, 3)  # Больший вес для панели Shogun
-        layout.addWidget(self.osc_panel, 2)
+        # Информация о текущем захвате
+        self.current_capture_name = "Нет данных"
+        self.current_description = "Нет данных"
         
-        self.setLayout(layout)
-        self.shogun_worker.connection_error_signal.connect(self.shogun_panel.update_connection_error)
+        # Счетчик попыток подключения
+        self.reconnect_attempts = 0
+        
+        self.logger.info("ShogunWorker инициализирован")
+
+    def run(self):
+        """Основной метод потока. Запускает периодическую проверку состояния."""
+        self.logger.info("ShogunWorker запущен")
+        
+        # Попытка первоначального подключения
+        asyncio.run(self.connect_shogun())
+        
+        # Основной цикл работы
+        while self.running:
+            try:
+                if self.connected:
+                    # Проверяем состояние подключения и записи
+                    asyncio.run(self.check_status())
+                else:
+                    # Пытаемся переподключиться с нарастающей задержкой
+                    if self.reconnect_attempts < config.MAX_RECONNECT_ATTEMPTS:
+                        delay = min(
+                            config.BASE_RECONNECT_DELAY * (2 ** self.reconnect_attempts), 
+                            config.MAX_RECONNECT_DELAY
+                        )
+                        self.logger.info(f"Попытка переподключения через {delay} сек (попытка {self.reconnect_attempts + 1})")
+                        time.sleep(delay)
+                        self.reconnect_attempts += 1
+                        asyncio.run(self.connect_shogun())
+                    else:
+                        # Превышено максимальное количество попыток
+                        self.logger.warning("Превышено максимальное количество попыток подключения")
+                        time.sleep(5)  # Ждем 5 секунд перед следующей серией попыток
+                        self.reconnect_attempts = 0
+                        
+            except Exception as e:
+                self.logger.error(f"Ошибка в рабочем цикле ShogunWorker: {e}")
+                # При ошибке помечаем как отключено
+                self.connected = False
+                self.connection_signal.emit(False)
+                self.connection_error_signal.emit(True)
+                time.sleep(2)  # Задержка перед следующей итерацией при ошибке
+                
+            # Задержка между итерациями проверки
+            time.sleep(1)
+            
+        self.logger.info("ShogunWorker остановлен")
+        
+    def check_api_result(self, result: Tuple) -> Tuple[bool, Any]:
+        """
+        Проверяет результат вызова API и возвращает статус успеха и данные.
+        
+        Args:
+            result: Результат вызова API
+            
+        Returns:
+            Tuple[bool, Any]: Кортеж (успех, данные)
+        """
+        if result is None:
+            return False, None
+        
+        # В Vicon Core API результат обычно возвращается как кортеж,
+        # где первый элемент - это объект Result, а остальные - данные
+        if isinstance(result, tuple) and len(result) > 0:
+            if isinstance(result[0], Result):
+                # Проверяем, что результат успешный (Result.__bool__ определен в API)
+                if result[0]:
+                    # Возвращаем данные (остальную часть кортежа)
+                    return True, result[1:] if len(result) > 1 else None
+                else:
+                    # Результат содержит ошибку, определяем уровень логирования
+                    # NotAvailable - это нормальный код ошибки, когда нет активных записей
+                    if str(result[0]) == "NotAvailable: The information requested was not available":
+                        self.logger.debug(f"API: {result[0]}")
+                    else:
+                        self.logger.error(f"API вернул ошибку: {result[0]}")
+                    return False, None
+        
+        # Если формат ответа не соответствует ожидаемому
+        self.logger.warning(f"Неожиданный формат ответа API: {result}")
+        return False, None
+
+    async def connect_shogun(self) -> bool:
+        """
+        Подключение к Shogun Live API.
+        
+        Returns:
+            bool: True если подключение успешно, иначе False
+        """
+        try:
+            # Создаем клиент для подключения к Shogun Live
+            self.logger.info("Подключение к Shogun Live...")
+            
+            # В Vicon Core API класс Client выполняет автоматическое подключение при создании
+            self.client = ViconClient()
+            
+            # Проверяем версию сервера для подтверждения подключения
+            version = self.client.server_version()
+            if version:
+                self.logger.info(f"Подключено к Vicon API версии {version}")
+                
+                # Создаем сервис захвата
+                self.capture_service = CaptureServices(self.client)
+                
+                # Обновляем состояние
+                self.connected = True
+                self.reconnect_attempts = 0  # Сбрасываем счетчик попыток
+                self.connection_signal.emit(True)
+                self.connection_error_signal.emit(False)
+                
+                # Получаем и обновляем начальное состояние
+                await self.update_state()
+                
+                self.logger.info("Успешно подключено к Shogun Live")
+                return True
+            else:
+                self.logger.error("Не удалось получить версию сервера")
+                self.connected = False
+                self.connection_signal.emit(False)
+                self.connection_error_signal.emit(True)
+                return False
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка при подключении к Shogun Live: {e}")
+            self.connected = False
+            self.connection_signal.emit(False)
+            self.connection_error_signal.emit(True)
+            return False
+
+    async def reconnect_shogun(self) -> bool:
+        """
+        Переподключение к Shogun Live API.
+        
+        Returns:
+            bool: True если переподключение успешно, иначе False
+        """
+        # Сначала отключаемся, если были подключены
+        if self.client:
+            # В Vicon Core API нет явного метода disconnect
+            self.client = None
+            self.capture_service = None
+            
+        self.connected = False
+        self.connection_signal.emit(False)
+        
+        # Сбрасываем счетчик попыток для немедленного переподключения
+        self.reconnect_attempts = 0
+        
+        # Повторно подключаемся
+        return await self.connect_shogun()
+
+    async def check_status(self):
+        """Проверка текущего состояния подключения и записи."""
+        try:
+            if not self.client or not self.capture_service:
+                self.logger.error("Клиент или сервис захвата не инициализированы")
+                self.connected = False
+                self.connection_signal.emit(False)
+                self.connection_error_signal.emit(True)
+                return
+            
+            # Проверяем, что соединение еще активно
+            is_connected = False
+            try:
+                # Пробуем получить версию сервера
+                version = self.client.server_version()
+                
+                # Если версия получена, попробуем выполнить простую команду
+                # для проверки реального соединения
+                if version is not None:
+                    # Используем простой запрос к API, который не выбрасывает исключений
+                    # даже если API недоступен
+                    ping_response = self.capture_service.capture_name()
+                    success, _ = self.check_api_result(ping_response)
+                    is_connected = success
+                
+            except Exception as conn_error:
+                self.logger.debug(f"Ошибка при проверке соединения: {conn_error}")
+                is_connected = False
+            
+            # Проверяем изменение состояния соединения
+            if is_connected != self.connected:
+                self.connected = is_connected
+                self.connection_signal.emit(is_connected)
+                self.connection_error_signal.emit(not is_connected)
+                
+                if is_connected:
+                    self.logger.info("Соединение с Shogun Live установлено")
+                else:
+                    self.logger.warning("Соединение с Shogun Live потеряно")
+                    # Сбрасываем состояние записи, т.к. соединение потеряно
+                    if self.recording:
+                        self.recording = False
+                        self.recording_signal.emit(False)
+            
+            # Обновляем информацию о состоянии только если соединение активно
+            if self.connected:
+                await self.update_state()
+            
+        except Exception as e:
+            self.logger.error(f"Ошибка при проверке статуса: {e}")
+            self.connected = False
+            self.connection_signal.emit(False)
+            self.connection_error_signal.emit(True)
+
+    async def update_state(self):
+        """Обновление текущего состояния захвата и записи."""
+        try:
+            if not self.capture_service or not self.connected:
+                return
+                
+            # Проверяем состояние записи
+            try:
+                # Получаем текущее состояние записи
+                latest_state_response = self.capture_service.latest_capture_state()
+                success, data = self.check_api_result(latest_state_response)
+                
+                if success and data and len(data) >= 2:
+                    # Данные содержат id и state
+                    capture_id, state = data[0], data[1]
+                    
+                    # Проверяем состояние записи по state
+                    # EStarted = 2 означает активную запись
+                    is_recording = (state == CaptureServices.EState.EStarted.value)
+                    
+                    # Если состояние изменилось, сигнализируем об этом
+                    if is_recording != self.recording:
+                        self.recording = is_recording
+                        self.recording_signal.emit(is_recording)
+                        
+                        if is_recording:
+                            self.logger.info("Запись активна")
+                        else:
+                            self.logger.info("Запись неактивна")
+                else:
+                    # Если не удалось получить состояние или нет активных записей
+                    if self.recording:
+                        self.recording = False
+                        self.recording_signal.emit(False)
+                        self.logger.info("Запись неактивна")
+            except Exception as e:
+                # Перехватываем ошибку обращения к API на случай, если соединение потеряно
+                # во время выполнения запроса
+                if "RPCNotConnected" in str(e):
+                    self.connected = False
+                    self.connection_signal.emit(False)
+                    self.connection_error_signal.emit(True)
+                    self.logger.warning(f"Соединение с Shogun Live потеряно при проверке состояния записи")
+                    return
+                else:
+                    self.logger.debug(f"Не удалось получить состояние записи: {e}")
+            
+            # Получаем имя захвата
+            try:
+                capture_name_response = self.capture_service.capture_name()
+                success, data = self.check_api_result(capture_name_response)
+                
+                if success and data and len(data) > 0:
+                    new_capture_name = data[0]
+                    if new_capture_name != self.current_capture_name:
+                        self.current_capture_name = new_capture_name
+                        self.capture_name_changed_signal.emit(new_capture_name)
+            except Exception as e:
+                if "RPCNotConnected" in str(e):
+                    self.connected = False
+                    self.connection_signal.emit(False)
+                    self.connection_error_signal.emit(True)
+                    self.logger.warning(f"Соединение с Shogun Live потеряно при получении имени захвата")
+                    return
+                else:
+                    self.logger.debug(f"Не удалось получить имя захвата: {e}")
+            
+            # Получаем описание захвата
+            try:
+                description_response = self.capture_service.capture_description()
+                success, data = self.check_api_result(description_response)
+                
+                if success and data and len(data) > 0:
+                    new_description = data[0]
+                    if new_description != self.current_description:
+                        self.current_description = new_description
+                        self.description_changed_signal.emit(new_description)
+            except Exception as e:
+                if "RPCNotConnected" in str(e):
+                    self.connected = False
+                    self.connection_signal.emit(False)
+                    self.connection_error_signal.emit(True)
+                    self.logger.warning(f"Соединение с Shogun Live потеряно при получении описания захвата")
+                    return
+                else:
+                    self.logger.debug(f"Не удалось получить описание захвата: {e}")
+        
+        except Exception as e:
+            self.logger.error(f"Ошибка при обновлении состояния: {e}")
+
+    async def startcapture(self) -> bool:
+        """
+        Запуск записи в Shogun Live.
+        
+        Returns:
+            bool: True если запись успешно запущена, иначе False
+        """
+        if not self.connected or not self.capture_service:
+            self.logger.warning("Не удалось запустить запись: нет подключения")
+            return False
+            
+        try:
+            self.logger.info("Запуск записи...")
+            
+            # Запускаем запись используя метод API start_capture
+            response = self.capture_service.start_capture()
+            success, data = self.check_api_result(response)
+            
+            if success:
+                capture_id = data[0] if data and len(data) > 0 else "неизвестно"
+                self.logger.info(f"Запись успешно запущена (ID: {capture_id})")
+                # Запись запущена, обновим состояние при следующей проверке
+                self.recording = True
+                self.recording_signal.emit(True)
+                return True
+            else:
+                self.logger.error("Не удалось запустить запись: API вернул ошибку")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Ошибка при запуске записи: {e}")
+            return False
+
+    async def stopcapture(self) -> bool:
+        """
+        Остановка записи в Shogun Live.
+        
+        Returns:
+            bool: True если запись успешно остановлена, иначе False
+        """
+        if not self.connected or not self.capture_service:
+            self.logger.warning("Не удалось остановить запись: нет подключения")
+            return False
+            
+        try:
+            self.logger.info("Остановка записи...")
+            
+            # Останавливаем запись используя метод API stop_capture с идентификатором 0
+            # согласно документации в capture_services.py, id=0 останавливает любую активную запись
+            response = self.capture_service.stop_capture(0)
+            success, _ = self.check_api_result(response)
+            
+            if success:
+                self.logger.info("Запись успешно остановлена")
+                # Запись остановлена, обновим состояние
+                self.recording = False
+                self.recording_signal.emit(False)
+                return True
+            else:
+                self.logger.error("Не удалось остановить запись: API вернул ошибку")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Ошибка при остановке записи: {e}")
+            return False
+
+    async def set_capture_name(self, name: str) -> bool:
+        """
+        Установка имени захвата в Shogun Live.
+        
+        Args:
+            name: Новое имя захвата
+            
+        Returns:
+            bool: True если имя успешно установлено, иначе False
+        """
+        if not self.connected or not self.capture_service:
+            self.logger.warning("Не удалось установить имя захвата: нет подключения")
+            return False
+            
+        try:
+            self.logger.info(f"Установка имени захвата: {name}")
+            
+            # Устанавливаем имя захвата используя метод API set_capture_name
+            response = self.capture_service.set_capture_name(name)
+            success, _ = self.check_api_result(response)
+            
+            if success:
+                self.logger.info(f"Имя захвата успешно установлено: {name}")
+                # Обновляем локальное значение и отправляем сигнал
+                self.current_capture_name = name
+                self.capture_name_changed_signal.emit(name)
+                return True
+            else:
+                self.logger.error("Не удалось установить имя захвата: API вернул ошибку")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Ошибка при установке имени захвата: {e}")
+            return False
+
+    async def set_capture_description(self, description: str) -> bool:
+        """
+        Установка описания захвата в Shogun Live.
+        
+        Args:
+            description: Новое описание захвата
+            
+        Returns:
+            bool: True если описание успешно установлено, иначе False
+        """
+        if not self.connected or not self.capture_service:
+            self.logger.warning("Не удалось установить описание захвата: нет подключения")
+            return False
+            
+        try:
+            self.logger.info(f"Установка описания захвата: {description}")
+            
+            # Устанавливаем описание захвата используя метод API set_capture_description
+            response = self.capture_service.set_capture_description(description)
+            success, _ = self.check_api_result(response)
+            
+            if success:
+                self.logger.info("Описание захвата успешно установлено")
+                # Обновляем локальное значение и отправляем сигнал
+                self.current_description = description
+                self.description_changed_signal.emit(description)
+                return True
+            else:
+                self.logger.error("Не удалось установить описание захвата: API вернул ошибку")
+                return False
+                
+        except Exception as e:
+            self.logger.error(f"Ошибка при установке описания захвата: {e}")
+            return False
+
+    def stop(self):
+        """Остановка рабочего потока."""
+        self.logger.info("Останавливаем ShogunWorker...")
+        self.running = False
