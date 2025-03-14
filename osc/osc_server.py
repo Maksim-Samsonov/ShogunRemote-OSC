@@ -38,6 +38,7 @@ class OSCServer(QThread):
         self.dispatcher.map(config.OSC_STOP_RECORDING, self.stop_recording)
         self.dispatcher.map("/SetCaptureName", self.set_capture_name)
         self.dispatcher.map("/SetCaptureDescription", self.set_capture_description)
+        self.dispatcher.map(config.OSC_SET_CAPTURE_FOLDER, self.set_capture_folder)  # Новый обработчик для установки папки захвата
         self.dispatcher.set_default_handler(self.default_handler)
     
     def start_recording(self, address: str, *args: Any) -> None:
@@ -134,6 +135,38 @@ class OSCServer(QThread):
         else:
             self.logger.warning("Не удалось установить описание захвата: нет подключения к Shogun Live")
     
+    def set_capture_folder(self, address: str, *args: Any) -> None:
+        """
+        Обработчик команды установки пути к папке захвата
+        
+        Args:
+            address: OSC-адрес сообщения
+            *args: Аргументы OSC-сообщения (первый аргумент - новый путь к папке)
+        """
+        if not args:
+            self.logger.warning(f"Получена команда OSC: {address} -> Отсутствует путь к папке захвата")
+            self.message_signal.emit(address, "Ошибка: отсутствует путь к папке захвата")
+            return
+            
+        # Преобразуем аргумент в строку и проверяем, что он не пустой
+        new_folder_path = str(args[0]).strip()
+        if not new_folder_path:
+            self.logger.warning(f"Получена команда OSC: {address} -> Пустой путь к папке захвата")
+            self.message_signal.emit(address, "Ошибка: пустой путь к папке захвата")
+            return
+            
+        self.logger.info(f"Получена команда OSC: {address} -> Установка пути к папке захвата: '{new_folder_path}'")
+        self.message_signal.emit(address, f"Установка пути к папке захвата: '{new_folder_path}'")
+        
+        if self.shogun_worker and self.shogun_worker.connected:
+            async def set_folder_task():
+                return await self.shogun_worker.set_capture_folder(new_folder_path)
+                
+            threading.Thread(target=self._run_async_task, 
+                             args=(set_folder_task,)).start()
+        else:
+            self.logger.warning("Не удалось установить путь к папке захвата: нет подключения к Shogun Live")
+    
     def default_handler(self, address: str, *args: Any) -> None:
         """
         Обработчик для неизвестных OSC-сообщений
@@ -213,7 +246,7 @@ class OSCServer(QThread):
     def run(self) -> None:
         """Запуск OSC-сервера"""
         try:
-            self.logger.info(f"Запуск OSC-сервера на {self.ip}:{self.port}")
+            self.logger.info(f"OSC-сервер запущен на {self.ip}:{self.port}")
             
             # Создаем сервер с обработкой ошибок
             try:
